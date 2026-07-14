@@ -95,6 +95,8 @@ find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Sophus REQUIRED)
+get_filename_component(Sophus_INCLUDE_DIRS "${Sophus_DIR}/../../../include" ABSOLUTE)
+add_definitions(-DSOPHUS_USE_BASIC_LOGGING)
 find_package(Boost REQUIRED COMPONENTS thread)
 find_package(fmt REQUIRED)
 
@@ -172,7 +174,6 @@ target_link_libraries(fastlivo_mapping
   imu_proc
   ${PCL_LIBRARIES}
   ${OpenCV_LIBRARIES}
-  ${Sophus_LIBRARIES}
   ${Boost_LIBRARIES}
 )
 

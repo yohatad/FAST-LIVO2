@@ -1,0 +1,16 @@
+# RealSense color stream on Pepper (intrinsics read from the recorded
+# /camera/color/camera_info: factory-rectified, zero distortion).
+/**:
+  ros__parameters:
+    cam_model: Pinhole
+    cam_width: 640
+    cam_height: 480
+    scale: 1.0
+    cam_fx: 606.1229
+    cam_fy: 605.7188
+    cam_cx: 321.3797
+    cam_cy: 256.2953
+    cam_d0: 0.0
+    cam_d1: 0.0
+    cam_d2: 0.0
+    cam_d3: 0.0

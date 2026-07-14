@@ -64,6 +64,20 @@ struct orgtype
 };
 
 /*** Velodyne ***/
+namespace unitree_l2_ros
+{
+struct EIGEN_ALIGN16 Point
+{
+  PCL_ADD_POINT4D;
+  float intensity;
+  float range;
+  float time;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+};
+} // namespace unitree_l2_ros
+POINT_CLOUD_REGISTER_POINT_STRUCT(unitree_l2_ros::Point,
+                                  (float, x, x)(float, y, y)(float, z, z)(float, intensity, intensity)(float, range, range)(float, time, time))
+
 namespace velodyne_ros
 {
 struct EIGEN_ALIGN16 Point
@@ -179,6 +193,7 @@ private:
   void Pandar128_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
   void robosense_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
   void l515_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
+  void unitree_l2_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
   void give_feature(PointCloudXYZI &pl, vector<orgtype> &types);
   void pub_func(PointCloudXYZI &pl, const rclcpp::Time &ct);
   int plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, uint i, uint &i_nex, Eigen::Vector3d &curr_direct);

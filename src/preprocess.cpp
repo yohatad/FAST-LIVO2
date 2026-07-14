@@ -85,6 +85,10 @@ void Preprocess::process(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &ms
     robosense_handler(msg);
     break;
 
+  case UNITREE_L2:
+    unitree_l2_handler(msg);
+    break;
+
   default:
     printf("Error LiDAR Type: %d \n", lidar_type);
     break;
@@ -198,6 +202,44 @@ void Preprocess::avia_handler(const livox_ros_driver2::msg::CustomMsg::SharedPtr
     }
   }
   printf("[ Preprocess ] Output point number: %zu \n", pl_surf.points.size());
+}
+
+
+void Preprocess::unitree_l2_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg)
+{
+  // Unitree L2 via l2lidar_node: fields x,y,z,intensity,range,time (all float32);
+  // per-point time is relative seconds from scan start; curvature wants ms.
+  pl_surf.clear();
+  pl_corn.clear();
+  pl_full.clear();
+
+  pcl::PointCloud<unitree_l2_ros::Point> pl_orig;
+  pcl::fromROSMsg(*msg, pl_orig);
+  int plsize = pl_orig.points.size();
+  if (plsize == 0) return;
+  pl_surf.reserve(plsize);
+
+  for (int i = 0; i < plsize; i++)
+  {
+    if (i % point_filter_num != 0) continue;
+
+    const auto &src = pl_orig.points[i];
+    if (src.range < blind) continue;
+
+    PointType added_pt;
+    added_pt.x = src.x;
+    added_pt.y = src.y;
+    added_pt.z = src.z;
+    added_pt.intensity = src.intensity;
+    added_pt.normal_x = 0;
+    added_pt.normal_y = 0;
+    added_pt.normal_z = 0;
+    added_pt.curvature = src.time * 1000.0f; // s -> ms
+
+    pl_surf.points.push_back(added_pt);
+  }
+
+  given_offset_time = true;
 }
 
 void Preprocess::l515_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg)

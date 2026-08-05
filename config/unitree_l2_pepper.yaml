@@ -17,7 +17,7 @@
       img_topic: "/camera/color/image_raw"
       lid_topic: "/points"
       imu_topic: "/imu/data"
-      img_en: 1
+      img_en: 0
       lidar_en: 1
       ros_driver_bug_fix: false
 
@@ -81,7 +81,11 @@
 
     uav:
       imu_rate_odom: false
-      gravity_align_en: false
+      # true: rotate the initial state so gravity lands on -Z, giving a Z-up map.
+      # The L2's IMU reads gravity along +X, so with this false the map frame is the
+      # raw initial IMU frame and rviz view controllers (which assume Z-up) treat
+      # forward driving as climbing.
+      gravity_align_en: true
 
     publish:
       dense_map_en: true

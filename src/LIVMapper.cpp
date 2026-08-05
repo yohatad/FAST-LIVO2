@@ -897,9 +897,11 @@ void LIVMapper::imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr &msg_in)
 
 cv::Mat LIVMapper::getImageFromMsg(const sensor_msgs::msg::Image::ConstSharedPtr &img_msg)
 {
-  cv::Mat img;
-  img = cv_bridge::toCvShare(img_msg, "bgr8")->image;
-  return img;
+  // toCvCopy, not toCvShare: the returned Mat outlives img_msg in img_buffer.
+  // toCvShare only allocates when it has to convert the encoding, so for a
+  // source already in bgr8 it would hand back a Mat aliasing the message's
+  // buffer, which is freed as soon as the callback returns.
+  return cv_bridge::toCvCopy(img_msg, "bgr8")->image;
 }
 
 // static int i = 0;

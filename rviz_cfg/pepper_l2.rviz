@@ -71,7 +71,7 @@ Visualization Manager:
       Length: 0.699999988079071
       Name: Axes
       Radius: 0.10000000149011612
-      Reference Frame: camera_init
+      Reference Frame: odom
       Value: true
     - Class: rviz_common/Group
       Displays:
@@ -130,7 +130,7 @@ Visualization Manager:
           Name: surround
           Position Transformer: XYZ
           Selectable: false
-          Size (Pixels): 1
+          Size (Pixels): 3
           Size (m): 0.004999999888241291
           Style: Points
           Topic:
@@ -218,7 +218,7 @@ Visualization Manager:
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /aft_mapped_to_init
+            Value: /odom_lio
           Value: true
       Enabled: true
       Name: Odometry
@@ -562,7 +562,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /aft_mapped_to_init
+        Value: /odom_lio
       Value: false
     - Class: rviz_default_plugins/MarkerArray
       Enabled: false
@@ -617,7 +617,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 0; 0; 0
-    Fixed Frame: camera_init
+    Fixed Frame: odom
     Frame Rate: 30
   Name: root
   Tools:
@@ -676,7 +676,7 @@ Visualization Manager:
       Name: Current View
       Near Clip Distance: 0.009999999776482582
       Pitch: 0.3547965884208679
-      Target Frame: aft_mapped
+      Target Frame: base_footprint
       Value: ThirdPersonFollower (rviz_default_plugins)
       Yaw: 2.5417795181274414
     Saved:

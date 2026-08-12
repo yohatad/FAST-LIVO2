@@ -191,6 +191,10 @@ public:
   VoxelMapConfig config_setting_;
   int current_frame_id_ = 0;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr voxel_map_pub_;
+  // LOCAL: was hardcoded "camera_init" in pubSinglePlane. Set by LIVMapper from
+  // publish.map_frame so the debug plane markers land in the same frame as
+  // every other published cloud. Default preserves upstream behaviour.
+  std::string map_frame_ = "camera_init";
   std::unordered_map<VOXEL_LOCATION, VoxelOctoTree *> voxel_map_;
 
   PointCloudXYZI::Ptr feats_undistort_;

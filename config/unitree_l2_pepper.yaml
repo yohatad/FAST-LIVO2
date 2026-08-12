@@ -42,7 +42,18 @@
       filter_size_surf: 0.25       # value validated in the point_lio tuning
       lidar_type: 8                # UNITREE_L2 (added handler)
       scan_line: 1
-      blind: 0.3                   # on the L2 'range' field, like FAST_LIO l2.yaml
+      # 2026-08-10: 0.3 -> 0.1, forced by the l2lidar_node range fix.
+      # The driver used to publish `range` as raw counts/1000 with the
+      # calibration bias omitted, so the field read ~0.5 m high and this 0.3
+      # filtered NOTHING. Now that `range` is calibrated metres, 0.3 would
+      # discard 10.3% of every scan (~543 of 5300 points, measured on
+      # bag/slam_august_8_bag). 0.1 preserves the effective behaviour
+      # (drops 0.03%, ~1 point/scan).
+      # The old comment "like FAST_LIO l2.yaml" was wrong: l2.yaml has always
+      # been 0.1, never 0.3. That mistake also propagated into
+      # point_lio/config/l2lidar_node.yaml, which cited "FAST-LIO's 0.3" when
+      # it meant this file. All three L2 configs are now 0.1.
+      blind: 0.1                   # min range (m) on the L2 'range' field
 
     vio:
       max_iterations: 5
@@ -81,13 +92,44 @@
 
     uav:
       imu_rate_odom: false
-      # true: rotate the initial state so gravity lands on -Z, giving a Z-up map.
-      # The L2's IMU reads gravity along +X, so with this false the map frame is the
-      # raw initial IMU frame and rviz view controllers (which assume Z-up) treat
-      # forward driving as climbing.
-      gravity_align_en: true
+      # 2026-08-12: true -> FALSE. Same policy, and same reason, as Point-LIO's
+      # gravity_align (see point_lio/config/l2lidar_node.yaml, which explains it
+      # at length): the LIO's world frame must start at IDENTITY rotation so all
+      # three backends give 'odom' the same meaning.
+      #
+      # true called gravityAlignment() (LIVMapper.cpp:301), which rotates
+      # pos/rot/vel/gravity by G_R_I0 to put gravity on -Z. FAST-LIO does NOT do
+      # that -- its equivalent is commented out upstream; it carries gravity as an
+      # estimated S2 state instead.
+      #
+      # WHY IT NOW BREAKS THINGS: lio_map_odom_bridge's level_source=calibration
+      # builds odom -> odom_lidar from the static mount rotation, and says so in
+      # its own comment -- "the LIO's world frame starts at identity rotation, so
+      # odom's axes ARE the lidar-IMU's axes". With true the frame arrives already
+      # levelled and the mount rotation is applied a SECOND time. Measured on
+      # bag/slam_august_8_bag: odom -> base_footprint came out at RPY
+      # (92.8, -6.0, 90.5) deg with z = -6.3 m -- the robot on its side, well
+      # below the floor. RViz showed nothing usable.
+      #
+      # The old justification for true (rviz view controllers assume Z-up) is
+      # obsolete: the bridge's one-time odom -> odom_lidar supplies exactly that
+      # levelling, which is why the rviz config's Fixed Frame is 'odom'.
+      gravity_align_en: false
 
     publish:
+      # LOCAL DIVERGENCE (LIVMapper.h / LIVMapper.cpp): upstream hardcodes
+      # "camera_init"/"aft_mapped" and broadcasts that TF unconditionally, so its
+      # output cannot be joined to the rig's tree. These three parameters mirror
+      # FAST-LIO's publish.map_frame / body_frame / publish_tf; the defaults in
+      # the code preserve upstream behaviour, and only this config opts in.
+      #
+      # publish_tf false hands the odom edge to lio_map_odom_bridge, which then
+      # publishes odom -> base_footprint the same way it does for FAST-LIO and
+      # Point-LIO. Pass lidar_imu_frame:=l2lidar_frame_imu to the launch so the bridge
+      # knows which static frame the estimated body corresponds to.
+      map_frame: "odom_lidar"
+      body_frame: "l2lidar_frame_imu"
+      publish_tf: false
       dense_map_en: true
       pub_effect_point_en: false
       pub_plane_en: false

@@ -76,6 +76,14 @@ public:
   
   string root_dir;
   string lid_topic, imu_topic, seq_name, img_topic;
+  // LOCAL: frame names and TF ownership made configurable. Upstream hardcodes
+  // "camera_init"/"aft_mapped" and broadcasts that TF unconditionally, which
+  // cannot be joined to a robot's existing tree. FAST-LIO exposes the same two
+  // (publish.map_frame / publish.body_frame) plus publish.publish_tf so an
+  // external bridge can own odom -> base_footprint. Defaults preserve upstream
+  // behaviour exactly.
+  string map_frame_ = "camera_init", body_frame_ = "aft_mapped";
+  bool publish_tf_ = true;
   V3D extT;
   M3D extR;
 

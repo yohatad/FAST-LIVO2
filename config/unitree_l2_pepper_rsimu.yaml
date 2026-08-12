@@ -1,0 +1,153 @@
+# FAST-LIVO2 for Pepper driven by the REALSENSE IMU (/camera/imu) instead of the
+# L2's own (/imu/data). A/B partner to unitree_l2_pepper.yaml -- everything not
+# mentioned below is identical to it, so read that file for the shared rationale
+# (Rcl/Pcl calibration provenance, blind, gravity_align_en, VIO disablement).
+#
+# WHY. The L2's gyro suppresses rotation about the gravity axis: below ~16 deg/s
+# it reports EXACTLY zero, between 16 and 50 it chatters between zero and the
+# correct value, above ~50 it is accurate to 0.3 %. Pepper's normal pivot speeds
+# (10-25 deg/s) sit inside the suppressed band, costing 139 deg of heading over a
+# 744 s run. Evidence, including the hand-turn control that rules out drivetrain
+# vibration: utils/L2_IMU/REPORT.md. Record: LOG.md sections 11-20.
+#
+# STATUS: UNVALIDATED. Not yet run. The FAST-LIO equivalent
+# (FAST_LIO/config/l2_rsimu.yaml) measured 3.8 % -> 2.4 % mean yaw error and
+# 11.2 % -> 4.6 % worst on a dropout-heavy window; this has not had that A/B.
+#
+# NOTE this config keeps img_en: 0. LOG.md section 4 established the VIO stage is
+# structurally unusable on this sensor pair (median 23-point visual submap), so
+# this is the LiDAR-inertial path only -- the IMU swap is the whole change.
+/**:
+  ros__parameters:
+    common:
+      img_topic: "/camera/color/image_raw"
+      lid_topic: "/points"
+      imu_topic: "/camera/imu"     # CHANGED from /imu/data
+      # /camera/imu is published BEST_EFFORT, exactly like /imu/data, so bag
+      # replay needs it in config/play_qos.yaml or rmw silently delivers nothing
+      # and the node waits forever for IMU init.
+      img_en: 0
+      lidar_en: 1
+      ros_driver_bug_fix: false
+
+    extrin_calib:
+      # Lidar origin expressed in the RealSense IMU frame:
+      #   p_camera_imu_optical = extrinsic_R * p_l2lidar + extrinsic_T
+      # (FAST-LIVO2 uses the same lidar->IMU convention as FAST-LIO and
+      #  Point-LIO -- see IMU_Processing.cpp set_extrinsic.)
+      # Identical values to FAST_LIO/config/l2_rsimu.yaml; derivation there.
+      # NB the target is camera_imu_OPTICAL_frame, which is what /camera/imu is
+      # stamped with. Omitting the final optical rotation (-0.5, 0.5, -0.5, 0.5)
+      # leaves the extrinsic 87.4 deg wrong. VALIDATED against gravity to 2.59 deg.
+      extrinsic_T: [0.009866, 0.056363, -0.008096]
+      extrinsic_R: [0.434395, 0.900105, 0.033359,
+                    -0.899601, 0.435404, -0.033784,
+                    -0.044933, -0.015334, 0.998872]
+      # Rcl/Pcl relate the CAMERA to the LIDAR and are unaffected by which IMU
+      # drives the filter. Unchanged from unitree_l2_pepper.yaml, and inert
+      # while img_en: 0.
+      Rcl: [0.427176, 0.904054, 0.014358,
+            -0.903711, 0.427411, -0.025010,
+            -0.028747, -0.002292, 0.999584]
+      Pcl: [0.028173, 0.030849, -0.015467]
+
+    time_offset:
+      imu_time_offset: 0.0
+      # ^ NOT known to be zero here. unitree_l2_pepper.yaml can assume 0.0
+      # because the L2 timestamps both streams; the RealSense is a different
+      # driver with its own clock. Gyro cross-correlation put the two within
+      # 5 ms and a +/-20 ms sweep on the FAST-LIO side came out flat, but
+      # re-sweep here if registration smears during rotation.
+      img_time_offset: 0.0
+      exposure_time_init: 0.0
+
+    preprocess:
+      point_filter_num: 1
+      filter_size_surf: 0.25
+      lidar_type: 8                # UNITREE_L2
+      scan_line: 1
+      blind: 0.1                   # gates on the `range` FIELD (preprocess.cpp:227),
+                                   # which is calibrated metres since the
+                                   # l2lidar_node fix -- see LOG.md section 15
+
+    vio:
+      max_iterations: 5
+      outlier_threshold: 1000
+      img_point_cov: 100
+      patch_size: 8
+      patch_pyrimid_level: 4
+      normal_en: true
+      raycast_en: false
+      inverse_composition_en: false
+      exposure_estimate_en: true
+      inv_expo_cov: 0.1
+
+    imu:
+      imu_en: true
+      imu_int_frame: 30
+      # Rescaled from unitree_l2_pepper.yaml by the measured variance ratio
+      # between the two IMUs, on gated-still windows with the lidar motor
+      # running (the operating condition): the L2 sits at gyro 0.7445 deg/s /
+      # accel 0.3737 m/s^2, the RealSense at 2.7711 / 0.1245.
+      #     gyro  variance x13.8  ->  0.3 * 13.8 = 4.1
+      #     accel variance x0.11  ->  2.0 * 0.11 = 0.22
+      # The trade runs both ways: the RealSense gyro is genuinely noisier, its
+      # accelerometer far quieter (the L2's IMU sits inside the spinning-motor
+      # housing, and Figure 6 of the report shows that motor raises every
+      # sensor's floor 3-8x). In angle terms this noise costs ~0.06 deg per scan
+      # against the 5+ deg per turn the suppression was costing.
+      acc_cov: 0.22                # was 2.0
+      gyr_cov: 4.1                 # was 0.3
+      b_acc_cov: 0.0001            # bias random walk: L2 values kept as a starting
+      b_gyr_cov: 0.0001            # point; NOT characterised for the D435i
+                                   # (LOG.md section 16b) -- settle by A/B.
+
+    lio:
+      max_iterations: 5
+      dept_err: 0.02
+      beam_err: 0.05
+      min_eigen_value: 0.0025
+      voxel_size: 0.5
+      max_layer: 2
+      max_points_num: 50
+      layer_init_num: [5, 5, 5, 5, 5]
+
+    local_map:
+      map_sliding_en: false
+      half_map_size: 100
+      sliding_thresh: 8.0
+
+    uav:
+      imu_rate_odom: false
+      # FALSE, tracking unitree_l2_pepper.yaml -- read the long note there.
+      # Short version: gravityAlignment() pre-levels the map frame, and
+      # lio_map_odom_bridge then levels it AGAIN from the static mount rotation,
+      # yielding a ~90 deg roll on odom -> base_footprint. It matters just as
+      # much on this arm, and arguably more: the bridge must be given
+      # lidar_imu_frame:=camera_imu_optical_frame so the mount rotation it reads
+      # is base_footprint -> camera_imu_optical_frame (gravity along -Y, optical
+      # convention) rather than the L2's +X.
+      gravity_align_en: false
+
+    publish:
+      # LOCAL DIVERGENCE (LIVMapper.h / LIVMapper.cpp): upstream hardcodes
+      # "camera_init"/"aft_mapped" and broadcasts that TF unconditionally, so its
+      # output cannot be joined to the rig's tree. These three parameters mirror
+      # FAST-LIO's publish.map_frame / body_frame / publish_tf; the defaults in
+      # the code preserve upstream behaviour, and only this config opts in.
+      #
+      # publish_tf false hands the odom edge to lio_map_odom_bridge, which then
+      # publishes odom -> base_footprint the same way it does for FAST-LIO and
+      # Point-LIO. Pass lidar_imu_frame:=camera_imu_optical_frame to the launch so the bridge
+      # knows which static frame the estimated body corresponds to.
+      map_frame: "odom_lidar"
+      body_frame: "camera_imu_optical_frame"
+      publish_tf: false
+      dense_map_en: true
+      pub_effect_point_en: false
+      pub_plane_en: false
+      pub_scan_num: 1
+      blind_rgb_points: 0.0
+
+    evo:
+      seq_name: "pepper_l2_rsimu"

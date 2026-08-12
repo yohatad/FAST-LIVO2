@@ -45,7 +45,7 @@ LIVMapper::LIVMapper(rclcpp::Node::SharedPtr &node, std::string node_name)
   initializeFiles();
   initializeComponents(this->node);          // initialize components errors
   path.header.stamp = this->node->now();
-  path.header.frame_id = "camera_init";
+  path.header.frame_id = map_frame_;
 }
 
 LIVMapper::~LIVMapper() {}
@@ -80,6 +80,10 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->declare_parameter<bool>("uav.gravity_align_en", false);
 
   this->node->declare_parameter<std::string>("evo.seq_name", "01");
+  // LOCAL: see include/LIVMapper.h. Defaults match upstream's hardcoded values.
+  this->node->declare_parameter<std::string>("publish.map_frame", "camera_init");
+  this->node->declare_parameter<std::string>("publish.body_frame", "aft_mapped");
+  this->node->declare_parameter<bool>("publish.publish_tf", true);
   this->node->declare_parameter<bool>("evo.pose_output_en", false);
   this->node->declare_parameter<double>("imu.gyr_cov", 1.0);
   this->node->declare_parameter<double>("imu.acc_cov", 1.0);
@@ -144,6 +148,9 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->get_parameter("uav.gravity_align_en", gravity_align_en);
 
   this->node->get_parameter("evo.seq_name", seq_name);
+  this->node->get_parameter("publish.map_frame", map_frame_);
+  this->node->get_parameter("publish.body_frame", body_frame_);
+  this->node->get_parameter("publish.publish_tf", publish_tf_);
   this->node->get_parameter("evo.pose_output_en", pose_output_en);
   this->node->get_parameter("imu.gyr_cov", gyr_cov);
   this->node->get_parameter("imu.acc_cov", acc_cov);
@@ -283,6 +290,9 @@ void LIVMapper::initializeSubscribersAndPublishers(rclcpp::Node::SharedPtr &node
   pubImuPropOdom = this->node->create_publisher<nav_msgs::msg::Odometry>("/LIVO2/imu_propagate", 10000);
   imu_prop_timer = this->node->create_wall_timer(0.004s, std::bind(&LIVMapper::imu_prop_callback, this));
   voxelmap_manager->voxel_map_pub_= this->node->create_publisher<visualization_msgs::msg::MarkerArray>("/planes", 10000);
+  // LOCAL: the /planes markers were hardcoded to "camera_init"; keep them in
+  // whatever frame publish.map_frame selects, like every other published topic.
+  voxelmap_manager->map_frame_ = map_frame_;
 }
 
 void LIVMapper::handleFirstFrame() 
@@ -1255,17 +1265,34 @@ void LIVMapper::publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::Po
 
   /*** Publish Frame ***/
   sensor_msgs::msg::PointCloud2 laserCloudmsg;
+  // LOCAL DIVERGENCE. `filled` gates the publish below. Upstream published
+  // unconditionally, but in LIVO mode neither branch matches on the LIO half of
+  // the cycle (slam_mode_ is LIVO, so the second test fails; lio_vio_flg is LIO,
+  // so the first does too). That emitted a DEFAULT-CONSTRUCTED PointCloud2 --
+  // width 0, no fields at all -- for every other message. Measured on
+  // bag/slam_august_8_bag with img_en 1: 345 empty of 682.
+  //
+  // Harmless in ONLY_LIO, which is why this went unnoticed while img_en was 0.
+  // With VIO on it breaks RViz: the PointCloud2 display re-reads the available
+  // channels per message, so an fieldless cloud drops the RGB8 colour
+  // transformer and the map stops rendering in colour.
+  bool filled = false;
   if (slam_mode_ == LIVO && LidarMeasures.lio_vio_flg == VIO)
   {
     pcl::toROSMsg(*laserCloudWorldRGB, laserCloudmsg);
+    filled = true;
   }
   if (slam_mode_ == ONLY_LIO || slam_mode_ == ONLY_LO)
-  { 
-    pcl::toROSMsg(*pcl_w_wait_pub, laserCloudmsg); 
+  {
+    pcl::toROSMsg(*pcl_w_wait_pub, laserCloudmsg);
+    filled = true;
   }
-  laserCloudmsg.header.stamp = this->node->get_clock()->now(); //.fromSec(last_timestamp_lidar);
-  laserCloudmsg.header.frame_id = "camera_init";
-  pubLaserCloudFullRes->publish(laserCloudmsg);
+  if (filled)
+  {
+    laserCloudmsg.header.stamp = this->node->get_clock()->now(); //.fromSec(last_timestamp_lidar);
+    laserCloudmsg.header.frame_id = map_frame_;
+    pubLaserCloudFullRes->publish(laserCloudmsg);
+  }
 
   /**************** save map ****************/
   /* 1. make sure you have enough memories
@@ -1379,7 +1406,7 @@ void LIVMapper::publish_visual_sub_map(const rclcpp::Publisher<sensor_msgs::msg:
     sensor_msgs::msg::PointCloud2 laserCloudmsg;
     pcl::toROSMsg(*sub_pcl_visual_map_pub, laserCloudmsg);
     laserCloudmsg.header.stamp = this->node->get_clock()->now();
-    laserCloudmsg.header.frame_id = "camera_init";
+    laserCloudmsg.header.frame_id = map_frame_;
     pubSubVisualMap->publish(laserCloudmsg);
   }
 }
@@ -1397,7 +1424,7 @@ void LIVMapper::publish_effect_world(const rclcpp::Publisher<sensor_msgs::msg::P
   sensor_msgs::msg::PointCloud2 laserCloudFullRes3;
   pcl::toROSMsg(*laserCloudWorld, laserCloudFullRes3);
   laserCloudFullRes3.header.stamp = this->node->get_clock()->now();
-  laserCloudFullRes3.header.frame_id = "camera_init";
+  laserCloudFullRes3.header.frame_id = map_frame_;
   pubLaserCloudEffect->publish(laserCloudFullRes3);
 }
 
@@ -1414,8 +1441,8 @@ template <typename T> void LIVMapper::set_posestamp(T &out)
 
 void LIVMapper::publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pubOdomAftMapped)
 {
-  odomAftMapped.header.frame_id = "camera_init";
-  odomAftMapped.child_frame_id = "aft_mapped";
+  odomAftMapped.header.frame_id = map_frame_;
+  odomAftMapped.child_frame_id = body_frame_;
   odomAftMapped.header.stamp = this->node->get_clock()->now(); //.ros::Time()fromSec(last_timestamp_lidar);
   set_posestamp(odomAftMapped.pose.pose);
 
@@ -1429,14 +1456,19 @@ void LIVMapper::publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry
   q.setY(geoQuat.y);
   q.setZ(geoQuat.z);
   transform.setRotation(q);
-  br->sendTransform(geometry_msgs::msg::TransformStamped(createTransformStamped(transform, odomAftMapped.header.stamp, "camera_init", "aft_mapped")));
+  // LOCAL: gated. With publish_tf false an external bridge owns the odom edge,
+  // exactly as FAST-LIO's publish.publish_tf allows.
+  if (publish_tf_)
+  {
+    br->sendTransform(geometry_msgs::msg::TransformStamped(createTransformStamped(transform, odomAftMapped.header.stamp, map_frame_, body_frame_)));
+  }
   pubOdomAftMapped->publish(odomAftMapped);
 }
 
 void LIVMapper::publish_mavros(const rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr &mavros_pose_publisher)
 {
   msg_body_pose.header.stamp = this->node->get_clock()->now();
-  msg_body_pose.header.frame_id = "camera_init";
+  msg_body_pose.header.frame_id = map_frame_;
   set_posestamp(msg_body_pose.pose);
   mavros_pose_publisher->publish(msg_body_pose);
 }
@@ -1445,7 +1477,7 @@ void LIVMapper::publish_path(const rclcpp::Publisher<nav_msgs::msg::Path>::Share
 {
   set_posestamp(msg_body_pose.pose);
   msg_body_pose.header.stamp = this->node->get_clock()->now();
-  msg_body_pose.header.frame_id = "camera_init";
+  msg_body_pose.header.frame_id = map_frame_;
   path.poses.push_back(msg_body_pose);
   pubPath->publish(path);
 }

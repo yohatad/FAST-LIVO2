@@ -119,7 +119,7 @@ Visualization Manager:
           Channel Name: intensity
           Class: rviz_default_plugins/PointCloud2
           Color: 238; 238; 236
-          Color Transformer: RGB8
+          Color Transformer: AxisColor
           Decay Time: 10000
           Enabled: true
           Invert Rainbow: false

@@ -265,13 +265,27 @@ void LIVMapper::initializeFiles()
 void LIVMapper::initializeSubscribersAndPublishers(rclcpp::Node::SharedPtr &node, image_transport::ImageTransport &it_)
 {
   image_transport::ImageTransport it(this->node);
+
+  // BEST_EFFORT, not the default RELIABLE that a bare depth argument gives.
+  // Sensor drivers publish with rclcpp::SensorDataQoS() (BEST_EFFORT), and DDS
+  // refuses to match a RELIABLE reader against a BEST_EFFORT writer -- the
+  // reader demands more than the writer offers. That mismatch is silent on this
+  // side: the subscription simply never fires, while the driver logs
+  // "requesting incompatible QoS ... RELIABILITY_QOS_POLICY". Seen with
+  // l2lidar_node, which publishes /points and /imu/data as SensorDataQoS.
+  // A BEST_EFFORT reader still matches a RELIABLE writer (it asks for less), so
+  // this works against reliable publishers -- bag playback, RealSense images --
+  // too. The 200000 depth is upstream's and is kept: history depth is an
+  // independent policy and is never the cause of an incompatibility.
+  const auto sensor_qos = rclcpp::QoS(200000).best_effort();
+
   if (p_pre->lidar_type == AVIA) {
-    sub_pcl = this->node->create_subscription<livox_ros_driver2::msg::CustomMsg>(lid_topic, 200000, std::bind(&LIVMapper::livox_pcl_cbk, this, std::placeholders::_1));
+    sub_pcl = this->node->create_subscription<livox_ros_driver2::msg::CustomMsg>(lid_topic, sensor_qos, std::bind(&LIVMapper::livox_pcl_cbk, this, std::placeholders::_1));
   } else {
-    sub_pcl = this->node->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, 200000, std::bind(&LIVMapper::standard_pcl_cbk, this, std::placeholders::_1));
+    sub_pcl = this->node->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, sensor_qos, std::bind(&LIVMapper::standard_pcl_cbk, this, std::placeholders::_1));
   }
-  sub_imu = this->node->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 200000, std::bind(&LIVMapper::imu_cbk, this, std::placeholders::_1));
-  sub_img = this->node->create_subscription<sensor_msgs::msg::Image>(img_topic, 200000, std::bind(&LIVMapper::img_cbk, this, std::placeholders::_1));
+  sub_imu = this->node->create_subscription<sensor_msgs::msg::Imu>(imu_topic, sensor_qos, std::bind(&LIVMapper::imu_cbk, this, std::placeholders::_1));
+  sub_img = this->node->create_subscription<sensor_msgs::msg::Image>(img_topic, sensor_qos, std::bind(&LIVMapper::img_cbk, this, std::placeholders::_1));
   
   pubLaserCloudFullRes = this->node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", 100);
   pubNormal = this->node->create_publisher<visualization_msgs::msg::MarkerArray>("/visualization_marker", 100);

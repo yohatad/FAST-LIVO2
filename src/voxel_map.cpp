@@ -43,6 +43,9 @@ void loadVoxelConfig(rclcpp::Node::SharedPtr &node, VoxelMapConfig &voxel_config
   node->declare_parameter<double>("lio.sigma_num", 3);
   node->declare_parameter<double>("lio.beam_err", 0.02);
   node->declare_parameter<double>("lio.dept_err", 0.05);
+  node->declare_parameter<double>("lio.dept_err2", 0.04);
+  node->declare_parameter<double>("lio.beam_err2", 0.15);
+  node->declare_parameter<bool>("lio.log_degeneracy", false);
 
   // Declaration of parameter of type std::vector<int> won't build, https://github.com/ros2/rclcpp/issues/1585  
   node->declare_parameter<vector<int64_t>>("lio.layer_init_num", std::vector<int64_t>{5,5,5,5,5}); 
@@ -60,6 +63,9 @@ void loadVoxelConfig(rclcpp::Node::SharedPtr &node, VoxelMapConfig &voxel_config
   node->get_parameter("lio.sigma_num", voxel_config.sigma_num_);
   node->get_parameter("lio.beam_err", voxel_config.beam_err_);
   node->get_parameter("lio.dept_err", voxel_config.dept_err_);
+  node->get_parameter("lio.dept_err2", voxel_config.dept_err2_);
+  node->get_parameter("lio.beam_err2", voxel_config.beam_err2_);
+  node->get_parameter("lio.log_degeneracy", voxel_config.log_degeneracy_);
   node->get_parameter("lio.layer_init_num", voxel_config.layer_init_num_);
   node->get_parameter("lio.max_points_num", voxel_config.max_points_num_);
   node->get_parameter("lio.min_iterations", voxel_config.max_iterations_);
@@ -367,7 +373,9 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     V3D point_this(feats_down_body_->points[i].x, feats_down_body_->points[i].y, feats_down_body_->points[i].z);
     if (point_this[2] == 0) { point_this[2] = 0.001; }
     M3D var;
-    calcBodyCov(point_this, config_setting_.dept_err_, config_setting_.beam_err_, var);
+    const bool second = feats_down_body_->points[i].normal_x > 0.5f;
+    calcBodyCov(point_this, second ? config_setting_.dept_err2_ : config_setting_.dept_err_,
+                second ? config_setting_.beam_err2_ : config_setting_.beam_err_, var);
     body_cov_list_.push_back(var);
     point_this = extR_ * point_this + extT_;
     M3D point_crossmat;
@@ -480,6 +488,21 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     auto &&HTz = Hsub_T_R_inv * meas_vec;
     // fout_dbg<<"HTz: "<<HTz<<endl;
     H_T_H.block<6, 6>(0, 0) = Hsub_T_R_inv * Hsub;
+
+    if (config_setting_.log_degeneracy_)
+    {
+      // Translation block only: its eigenvalues say which directions the scan constrains.
+      // A stairwell wall gives two strong horizontal directions and a near-null vertical one.
+      Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(H_T_H.block<3, 3>(3, 3));
+      const Eigen::Vector3d ev = es.eigenvalues();
+      const Eigen::Vector3d weak = es.eigenvectors().col(0);
+      static int deg_count = 0;
+      if ((deg_count++ % 10) == 0)
+        std::cerr << "[degeneracy] eig " << ev(0) << " " << ev(1) << " " << ev(2)
+                  << "  ratio " << (ev(2) > 0 ? ev(0) / ev(2) : 0.0)
+                  << "  weakest dir [" << weak(0) << " " << weak(1) << " " << weak(2)
+                  << "]  |z| " << std::abs(weak(2)) << "  pts " << effct_feat_num_ << std::endl;
+    }
     // EigenSolver<Matrix<double, 6, 6>> es(H_T_H.block<6,6>(0,0));
     MD(DIM_STATE, DIM_STATE) &&K_1 = (H_T_H.block<DIM_STATE, DIM_STATE>(0, 0) + state_.cov.block<DIM_STATE, DIM_STATE>(0, 0).inverse()).inverse();
     G.block<DIM_STATE, 6>(0, 0) = K_1.block<DIM_STATE, 6>(0, 0) * H_T_H.block<6, 6>(0, 0);
@@ -561,7 +584,9 @@ void VoxelMapManager::BuildVoxelMap()
     pv.point_w << feats_down_world_->points[i].x, feats_down_world_->points[i].y, feats_down_world_->points[i].z;
     V3D point_this(feats_down_body_->points[i].x, feats_down_body_->points[i].y, feats_down_body_->points[i].z);
     M3D var;
-    calcBodyCov(point_this, config_setting_.dept_err_, config_setting_.beam_err_, var);
+    const bool second2 = feats_down_body_->points[i].normal_x > 0.5f;
+    calcBodyCov(point_this, second2 ? config_setting_.dept_err2_ : config_setting_.dept_err_,
+                second2 ? config_setting_.beam_err2_ : config_setting_.beam_err_, var);
     M3D point_crossmat;
     point_crossmat << SKEW_SYM_MATRX(point_this);
     var = (state_.rot_end * extR_) * var * (state_.rot_end * extR_).transpose() +

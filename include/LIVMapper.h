@@ -25,6 +25,7 @@ which is included as part of this source code package.
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <vikit/camera_loader.h>
 
 class LIVMapper
@@ -54,6 +55,16 @@ public:
   void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
   void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr &msg_in);
   void imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr &msg_in);
+  // Leg-kinematic odometry (velocity measurement), GrandTour anymal_state_odometry
+  void leg_cbk(const nav_msgs::msg::Odometry::ConstSharedPtr &msg_in);
+  void legVelocityUpdate(double state_time);
+  struct LegSample { double t; V3D v, w; M3D cov; };
+  std::deque<LegSample> leg_buffer;
+  bool leg_en = false;
+  std::string leg_topic = "/leg_odom";
+  double leg_noise_scale = 1.0, leg_noise_floor = 1e-4, leg_gate = 25.0, last_timestamp_leg = 0.0;
+  M3D R_base_imu = M3D::Identity(); V3D t_base_imu = V3D::Zero();
+  long leg_updates = 0, leg_gated = 0;
   void img_cbk(const sensor_msgs::msg::Image::ConstSharedPtr &msg_in);
   void publish_img_rgb(const image_transport::Publisher &pubImage, VIOManagerPtr vio_manager);
   void publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pubLaserCloudFullRes, VIOManagerPtr vio_manager);
@@ -177,6 +188,7 @@ public:
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr voxel_pub;
   std::shared_ptr<rclcpp::SubscriptionBase> sub_pcl;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_leg;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_img;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudFullRes;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pubNormal;

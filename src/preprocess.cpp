@@ -725,6 +725,9 @@ void Preprocess::xt32_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPt
       added_pt.y = pl_orig.points[i].y;
       added_pt.z = pl_orig.points[i].z;
       added_pt.intensity = pl_orig.points[i].intensity;
+      // The player tags merged points from a second LiDAR with ring >= 100; keep that as a
+      // per-point flag so the map can give them their own measurement covariance.
+      added_pt.normal_x = (pl_orig.points[i].ring >= 100) ? 1.f : 0.f;
       added_pt.curvature = (pl_orig.points[i].timestamp - time_head) * 1000.f;
 
       // printf("added_pt.curvature: %lf %lf \n", added_pt.curvature,

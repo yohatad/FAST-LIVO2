@@ -75,6 +75,13 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->declare_parameter<double>("time_offset.exposure_time_init", 0.0);
   this->node->declare_parameter<double>("time_offset.img_time_offset", 0.0);
   this->node->declare_parameter<double>("time_offset.imu_time_offset", 0.0);
+  this->node->declare_parameter<bool>("leg.enable", false);
+  this->node->declare_parameter<std::string>("leg.topic", "/leg_odom");
+  this->node->declare_parameter<double>("leg.noise_scale", 1.0);
+  this->node->declare_parameter<double>("leg.noise_floor", 1e-4);
+  this->node->declare_parameter<double>("leg.gate", 25.0);
+  this->node->declare_parameter<std::vector<double>>("leg.t_base_imu", std::vector<double>{0.0, 0.0, 0.0});
+  this->node->declare_parameter<std::vector<double>>("leg.q_base_imu", std::vector<double>{1.0, 0.0, 0.0, 0.0});
   this->node->declare_parameter<double>("time_offset.lidar_time_offset", 0.0);
   this->node->declare_parameter<bool>("uav.imu_rate_odom", false);
   this->node->declare_parameter<bool>("uav.gravity_align_en", false);
@@ -143,6 +150,19 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->get_parameter("time_offset.exposure_time_init", exposure_time_init);
   this->node->get_parameter("time_offset.img_time_offset", img_time_offset);
   this->node->get_parameter("time_offset.imu_time_offset", imu_time_offset);
+  {
+    std::vector<double> tb, qb;
+    this->node->get_parameter("leg.enable", leg_en);
+    this->node->get_parameter("leg.topic", leg_topic);
+    this->node->get_parameter("leg.noise_scale", leg_noise_scale);
+    this->node->get_parameter("leg.noise_floor", leg_noise_floor);
+    this->node->get_parameter("leg.gate", leg_gate);
+    this->node->get_parameter("leg.t_base_imu", tb);
+    this->node->get_parameter("leg.q_base_imu", qb);
+    t_base_imu = V3D(tb[0], tb[1], tb[2]);
+    R_base_imu = Eigen::Quaterniond(qb[0], qb[1], qb[2], qb[3]).toRotationMatrix();
+    if (leg_en) std::cout << "[leg] enabled on " << leg_topic << ", t_base_imu " << t_base_imu.transpose() << std::endl;
+  }
   this->node->get_parameter("time_offset.lidar_time_offset", lidar_time_offset);
   this->node->get_parameter("uav.imu_rate_odom", imu_prop_enable);
   this->node->get_parameter("uav.gravity_align_en", gravity_align_en);
@@ -285,6 +305,7 @@ void LIVMapper::initializeSubscribersAndPublishers(rclcpp::Node::SharedPtr &node
     sub_pcl = this->node->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, sensor_qos, std::bind(&LIVMapper::standard_pcl_cbk, this, std::placeholders::_1));
   }
   sub_imu = this->node->create_subscription<sensor_msgs::msg::Imu>(imu_topic, sensor_qos, std::bind(&LIVMapper::imu_cbk, this, std::placeholders::_1));
+  if (leg_en) sub_leg = this->node->create_subscription<nav_msgs::msg::Odometry>(leg_topic, sensor_qos, std::bind(&LIVMapper::leg_cbk, this, std::placeholders::_1));
   sub_img = this->node->create_subscription<sensor_msgs::msg::Image>(img_topic, sensor_qos, std::bind(&LIVMapper::img_cbk, this, std::placeholders::_1));
   
   pubLaserCloudFullRes = this->node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", 100);
@@ -463,6 +484,7 @@ void LIVMapper::handleLIO()
   voxelmap_manager->StateEstimation(state_propagat);
   _state = voxelmap_manager->state_;
   _pv_list = voxelmap_manager->pv_list_;
+  if (leg_en) legVelocityUpdate(LidarMeasures.last_lio_update_time);
 
   double t2 = omp_get_wtime();
 
@@ -867,6 +889,65 @@ void LIVMapper::livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::ConstShar
   sig_buffer.notify_all();
 }
 
+void LIVMapper::leg_cbk(const nav_msgs::msg::Odometry::ConstSharedPtr &msg_in)
+{
+  LegSample s;
+  s.t = stamp2Sec(msg_in->header.stamp);
+  s.v = V3D(msg_in->twist.twist.linear.x, msg_in->twist.twist.linear.y, msg_in->twist.twist.linear.z);
+  s.w = V3D(msg_in->twist.twist.angular.x, msg_in->twist.twist.angular.y, msg_in->twist.twist.angular.z);
+  for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) s.cov(i, j) = msg_in->twist.covariance[i * 6 + j];
+  mtx_buffer.lock();
+  leg_buffer.push_back(s);
+  last_timestamp_leg = s.t;
+  while (leg_buffer.size() > 200) leg_buffer.pop_front();
+  mtx_buffer.unlock();
+}
+
+// EKF update of the world-frame velocity state with the leg-odometry twist interpolated at
+// state_time. State convention: rot_end = R_world_imu, vel_end = world velocity of the IMU origin.
+void LIVMapper::legVelocityUpdate(double state_time)
+{
+  mtx_buffer.lock();
+  const LegSample *lo = nullptr, *hi = nullptr;
+  for (const auto &s : leg_buffer) { if (s.t <= state_time) lo = &s; if (s.t >= state_time && !hi) hi = &s; }
+  V3D v_b, w_b; M3D C;
+  if (lo && hi && hi != lo)
+  {
+    double a = (state_time - lo->t) / std::max(hi->t - lo->t, 1e-6);
+    v_b = (1 - a) * lo->v + a * hi->v; w_b = (1 - a) * lo->w + a * hi->w; C = (1 - a) * lo->cov + a * hi->cov;
+  }
+  else
+  {
+    const LegSample *n = lo ? lo : hi;
+    if (!n || std::fabs(n->t - state_time) > 0.03) { mtx_buffer.unlock(); return; }
+    v_b = n->v; w_b = n->w; C = n->cov;
+  }
+  mtx_buffer.unlock();
+
+  // base-frame velocity of the IMU origin -> IMU frame -> world frame
+  const V3D v_i = R_base_imu.transpose() * (v_b + w_b.cross(t_base_imu));
+  const V3D z_w = _state.rot_end * v_i;
+  M3D R_i = R_base_imu.transpose() * (C * leg_noise_scale) * R_base_imu;
+  for (int i = 0; i < 3; i++) R_i(i, i) = std::max(R_i(i, i), leg_noise_floor);
+  const M3D R_w = _state.rot_end * R_i * _state.rot_end.transpose();
+
+  // h(x) = vel_end ; H = [0 | 0 | 0 | I(vel, cols 7..9) | 0 ...]
+  const V3D r = z_w - _state.vel_end;
+  const Eigen::Matrix<double, DIM_STATE, 3> PHt = _state.cov.block<DIM_STATE, 3>(0, 7);
+  const M3D S = _state.cov.block<3, 3>(7, 7) + R_w;
+  const M3D S_inv = S.inverse();
+  if (r.transpose() * S_inv * r > leg_gate) { leg_gated++; return; }   // slip / outlier
+  const Eigen::Matrix<double, DIM_STATE, 3> K = PHt * S_inv;
+  Eigen::Matrix<double, DIM_STATE, 1> dx = K * r;
+  _state += dx;
+  Eigen::Matrix<double, DIM_STATE, DIM_STATE> I_KH = Eigen::Matrix<double, DIM_STATE, DIM_STATE>::Identity();
+  I_KH.block<DIM_STATE, 3>(0, 7) -= K;
+  _state.cov = I_KH * _state.cov * I_KH.transpose() + K * R_w * K.transpose();
+  voxelmap_manager->state_ = _state;
+  leg_updates++;
+  if ((leg_updates % 600) == 0) std::cerr << "[leg] updates " << leg_updates << ", gated " << leg_gated << std::endl;
+}
+
 void LIVMapper::imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr &msg_in)
 {
   if (!imu_en) return;
@@ -1007,6 +1088,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       lidar_pushed = true;                                                                                       // flag
     }
 
+    if (leg_en && !leg_buffer.empty() && last_timestamp_leg < meas.lidar_frame_end_time) return false;
     if (imu_en && last_timestamp_imu < meas.lidar_frame_end_time)
     { // waiting imu message needs to be
       // larger than _lidar_frame_end_time,

@@ -42,6 +42,11 @@ typedef struct VoxelMapConfig
   double planner_threshold_;
   double beam_err_;
   double dept_err_;
+  // Secondary LiDAR (points tagged by the player with ring >= 100): its own noise, so a
+  // sparser/noisier sensor does not get the same weight per point as the primary one.
+  double beam_err2_;
+  double dept_err2_;
+  bool log_degeneracy_;
   double sigma_num_;
   bool is_pub_plane_map_;
 
